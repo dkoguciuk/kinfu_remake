@@ -8,6 +8,10 @@
 #include <fstream>
 #include <iostream>
 
+#include <boost/filesystem.hpp>
+
+namespace fs = boost::filesystem;
+
 using namespace kfusion;
 using namespace std;
 
@@ -21,7 +25,7 @@ struct KinFuApp
         cout << "    H    : print VTK help" << endl;
         cout << "    K    : print this help" << endl;
         cout << "    Q    : exit" << endl;
-        cout << "    T    : take cloud" << endl;
+        cout << "    T    : take cloud and save as a .pcd file" << endl;
         cout << "    M    : take mesh and save as a .ply file" << endl;
         cout << "    I    : toggle iteractive mode" << endl;
         cout << "=================" << endl;
@@ -36,7 +40,7 @@ struct KinFuApp
             return;
 
         if(event.code == 't' || event.code == 'T')
-            kinfu.take_cloud(*kinfu.kinfu_);
+            kinfu.take_and_save_cloud(*kinfu.kinfu_);
 
         if(event.code == 'i' || event.code == 'I')
             kinfu.iteractive_mode_ = !kinfu.iteractive_mode_;
@@ -97,7 +101,7 @@ struct KinFuApp
         cv::imshow("Scene", view_host_);
     }
 
-    void take_cloud(KinFu& kinfu)
+    void take_and_save_cloud(KinFu& kinfu)
     {
         cuda::DeviceArray<Point> cloud = kinfu.tsdf().fetchCloud(cloud_buffer_);
         cv::Mat cloud_host(1, (int)cloud.size(), CV_32FC4);
@@ -112,6 +116,62 @@ struct KinFuApp
             cloud.download(cloud_host.ptr<Point>());
             viz.showWidget("cloud", cv::viz::WCloud(cloud_host));
         }
+        save_next_cloud(cloud_host);
+    }
+
+
+    void save_next_cloud(const cv::Mat &cloud_host)
+    {
+        const std::string dirname = "pointclouds";
+        const std::string filenames_template = "cloud";
+
+        // Pointclouds dir
+        if (!fs::exists(dirname))
+            fs::create_directory(dirname);
+
+        // Get filenames
+        std::vector<std::string> filenames;
+        for (fs::directory_iterator it(dirname); it!=fs::directory_iterator(); ++it)
+            if (is_regular_file(it->path())) filenames.push_back(it->path().filename().string());
+
+        // Determine filename
+        std::string filename;
+        if (filenames.empty()) filename = filenames_template + "_0.pcd";
+        else
+        {
+            int max = -1;
+            for (auto flnm : filenames)
+            {
+                size_t pos = flnm.find(filenames_template);
+                if (pos != std::string::npos)
+                {
+                    size_t flood = flnm.find("_");
+                    size_t dot = flnm.find(".");
+                    int curr = std::stoi(flnm.substr(flood + 1, dot-flood - 1));
+                    if (max < curr) max = curr;
+                }
+            }
+            filename = filenames_template + "_" + std::to_string(max+1) + ".pcd";
+        }
+        fs::path filepath = fs::path(dirname) / fs::path(filename);
+
+        // Save pcd file
+        ofstream myfile;
+        myfile.open(filepath.string());
+        myfile << "# .PCD v.5 - Point Cloud Data file format\n";
+        myfile << "FIELDS x y z\n";
+        myfile << "SIZE 4 4 4\n";
+        myfile << "TYPE F F F\n";
+        myfile << "WIDTH " << cloud_host.cols << "\n";
+        myfile << "HEIGHT 1\n";
+        myfile << "POINTS " << cloud_host.cols << "\n";
+        myfile << "DATA ascii\n";
+        for (int i=0; i<cloud_host.cols; ++i)
+            myfile << cloud_host.at<Point>(i).x << " " << cloud_host.at<Point>(i).y << " " <<  cloud_host.at<Point>(i).z << "\n";
+        myfile.close();
+
+        // Info
+        cout << "Succesfully saved : " << filename << " with " << cloud_host.cols << " points" << endl;
     }
 
     void write_mesh(KinFu& kinfu )
@@ -282,7 +342,7 @@ struct KinFuApp
             
             switch(key)
             {
-            case 't': case 'T' : take_cloud(kinfu); break;
+            case 't': case 'T' : take_and_save_cloud(kinfu); break;
             case 'i': case 'I' : iteractive_mode_ = !iteractive_mode_; break;
             case 'm': case 'M' : take_mesh(kinfu); break;
             case 27: exit_ = true; break;
